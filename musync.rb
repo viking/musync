@@ -2,7 +2,12 @@ require 'rubygems'
 require 'sinatra'
 require 'dm-core'
 require 'id3lib'
-require 'pp'
+require 'fileutils'
+require 'tarruby'
+
+unless defined?(ROOT)
+  ROOT = File.expand_path(File.dirname(__FILE__))
+end
 
 class Song
   include DataMapper::Resource
@@ -54,7 +59,7 @@ helpers do
   end
 
   def song_input(song, field, type, value)
-    %{<input type="#{type}" name="song[#{song[:which]}][#{field}]" value="#{h(value)}" class="#{field}" />}
+    %{<input type="#{type}" name="song[#{song[:which]}][#{field}]" value="#{h(value)}" />}
   end
 
   def song_text_field(song, field)
@@ -76,27 +81,36 @@ post '/upload' do
   # move the tarball to a temporary area, extract all files,
   # then move mp3 files to a staging area for user inspection
   @timestamp  = Time.now.to_i
-  tmp_dir     = "tmp/files/#{@timestamp}"
-  staging_dir = "tmp/staging/#{@timestamp}"
+  tmp_dir     = "%s/tmp/files/%d"   % [ROOT, @timestamp]
+  staging_dir = "%s/tmp/staging/%d" % [ROOT, @timestamp]
   src_file    = params[:file][:tempfile].path
   basename    = File.basename(src_file)
   dest_file   = "%s/%s" % [tmp_dir, basename]
-  system("mkdir", tmp_dir, staging_dir)
-  system("mv", src_file, tmp_dir)
-  system("tar", 'xzf', dest_file, '-C', tmp_dir)
-  system("rm", dest_file)
+  FileUtils.mkdir([tmp_dir, staging_dir])
+  FileUtils.mv(src_file, tmp_dir)
+  Dir.chdir(tmp_dir) do
+    Tar.gzopen(dest_file, File::RDONLY, 0644, Tar::GNU) do |tar|
+      tar.extract_all
+    end
+  end
+  FileUtils.rm(dest_file)
 
   @songs = []
   Dir["#{tmp_dir}/**/*.mp3"].each_with_index do |mp3, i|
     tag = ID3Lib::Tag.new(mp3)
     @songs << {
-      :which => i, :title => tag.title, :disc => tag.disc,
-      :track => tag.track, :year => tag.year, :artist => tag.artist,
+      :which => i,
+      :title => tag.title,
+      :disc  => tag.disc.split("/")[0],
+      :track => tag.track.split("/")[0],
+      :year  => tag.year,
+      :artist => tag.artist,
       :album => tag.album
     }
-    system("mv", mp3, "%s/%i.mp3" % [staging_dir, i])
+    FileUtils.mv(mp3, "%s/%i.mp3" % [staging_dir, i])
   end
-  system("rm", "-fr", tmp_dir)
+  FileUtils.rm_rf(tmp_dir)
+
   haml :upload
 end
 
@@ -120,9 +134,10 @@ post '/create' do
       attribs['album_id'] = album.id
     end
     song = Song.create(attribs)
-    system("mv", src_file, "songs/%d.mp3" % song.id)
+    FileUtils.mv(src_file, "songs/%d.mp3" % song.id)
   end
-  system("rm", "-fr", staging_dir)
+  FileUtils.rm_rf(staging_dir)
+
   redirect "/"
 end
 
@@ -138,58 +153,70 @@ __END__
   = yield
 
 @@ stylesheet
-input.track, input.disc
-  width: 2em
-input.year
-  width: 4em
-.editable
-  display: inline
+body
+  font:
+    family: Verdana
+    size: 10px
+label
+  font-weight: bold
+table.songs
+  th
+    font-size: 12px
+    border:
+      bottom: 2px solid gray
+.track, .disc, .year
+  input
+    width: 4em
 
 @@ index
 %h1 Songs
-%table
-  %tr
-    %th Track
-    %th Title
-    %th Artist
-    %th Album
-    %th Disc
-    %th Year
-  - @songs.each do |song|
+- if @songs.empty?
+  There are no songs yet!
+- else
+  %table.songs
     %tr
-      %td= song.track
-      %td= song.title
-      %td= song.artist.name
-      %td= song.album.name
-      %td= song.disc
-      %td= song.year
-%h2 Upload
+      %th.track Track
+      %th.title Title
+      %th.artist Artist
+      %th.album Album
+      %th.disc Disc
+      %th.year Year
+    - @songs.each do |song|
+      %tr
+        %td.track= song.track
+        %td.title= song.title
+        %td.artist= song.artist.name
+        %td.album= song.album.name
+        %td.disc= song.disc
+        %td.year= song.year
+%br/
+%br/
 %form{:action => "/upload", :method => "post", :enctype => "multipart/form-data"}
   %p
-    %label{:for => 'file'} File:
+    %label{:for => 'file'} Upload tarball:
     %input{:type => 'file', :name => 'file', :id => 'file'}/
   %p
     %input{:type => 'submit', :value => "Upload"}
 
 @@ upload
-%script{:src => "/jquery.editable-1.3.1.min.js", :type => "text/javascript"}
 %h1 Upload
 %form{:action => "/create", :method => "post"}
   %input{:type => "hidden", :name => "timestamp", :value => @timestamp}/
-  %table
+  %table.songs
     %tr
-      %th Track
-      %th Title
-      %th Artist
-      %th Album
-      %th Disc
-      %th Year
+      %th.track Track
+      %th.title Title
+      %th.artist Artist
+      %th.album Album
+      %th.disc Disc
+      %th.year Year
     - @songs.each do |song|
       %tr
-        %td= song_text_field(song, :track)
-        %td= song_text_field(song, :title)
-        %td= song_text_field(song, :artist)
-        %td= song_text_field(song, :album)
-        %td= song_text_field(song, :disc)
-        %td= song_text_field(song, :year)
+        %td.track= song_text_field(song, :track)
+        %td.title= song_text_field(song, :title)
+        %td.artist= song_text_field(song, :artist)
+        %td.album= song_text_field(song, :album)
+        %td.disc= song_text_field(song, :disc)
+        %td.year= song_text_field(song, :year)
+  %br/
   %input{:type => "submit", :value => "Create"}/
