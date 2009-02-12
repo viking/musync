@@ -2,8 +2,6 @@ require 'rubygems'
 require 'sinatra'
 require 'dm-core'
 require 'id3lib'
-require 'digest/md5'
-require 'fileutils'
 
 class Song
   include DataMapper::Resource
